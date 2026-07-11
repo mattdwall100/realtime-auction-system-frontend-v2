@@ -1,5 +1,8 @@
 # Real-time Auction System — Frontend
 
+> **🟢 Live and ready to use: <https://realtime-auction-system-frontend-v2.vercel.app>**
+> Hosted on Vercel; browse live auctions without an account, register to create and bid.
+
 Next.js (App Router, TypeScript) frontend for the auction system. It talks to a separately
 hosted FastAPI backend over REST — see `../backend`.
 
