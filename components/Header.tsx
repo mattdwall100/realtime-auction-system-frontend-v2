@@ -8,8 +8,9 @@ export default function Header() {
   const { bidderIdentifier, isReady, logout } = useAuth();
   const router = useRouter();
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    // Asks the server to clear the HttpOnly session cookie, then redirects.
+    await logout();
     router.push("/login");
   }
 

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+import { validateEmail } from "@/lib/validation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -18,6 +19,18 @@ export default function LoginPage() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+
+    // UX-only pre-checks; the backend validates authoritatively.
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+    if (!password) {
+      setError("Password is required.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       await loginWithPassword(email, password);

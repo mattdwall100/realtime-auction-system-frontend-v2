@@ -2,37 +2,64 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { ApiError, getAuction, type AuctionState } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
+import { type AuctionState } from "@/lib/api";
+import { useAuctionStream } from "@/lib/useAuctionStream";
 import { useToast } from "@/lib/toast";
 import { centsToDisplay } from "@/lib/money";
-import { computeServerOffsetMs } from "@/lib/time";
+import { computeServerOffsetMs, shouldRebaseOffset } from "@/lib/time";
 import CountdownTimer from "./CountdownTimer";
 import BidForm from "./BidForm";
 import BidHistory from "./BidHistory";
 
-const POLL_INTERVAL_MS = 1000;
-
 export default function AuctionView() {
   const params = useParams<{ id: string }>();
   const auctionId = params.id;
-  const { token } = useAuth();
   const { notify } = useToast();
 
-  const [auction, setAuction] = useState<AuctionState | null>(null);
-  const [serverOffsetMs, setServerOffsetMs] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [pollError, setPollError] = useState<string | null>(null);
+  // Live state arrives over SSE (see lib/useAuctionStream.ts): update events
+  // whenever the auction changes in the database, pings in between, and an
+  // automatic reconnect when the stream goes silent.
+  const { auction, isLoading, notFound, loadError, isReconnecting, applyState } =
+    useAuctionStream(auctionId);
 
-  // Polling always uses the latest token without re-subscribing the interval.
-  const tokenRef = useRef(token);
-  tokenRef.current = token;
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
+
+  // Each state carries a fresh server-time sample, but the estimate wobbles
+  // with network latency. Only rebase the countdown when the estimate moves
+  // beyond the drift threshold, so the visible timer doesn't jitter on every
+  // event (see lib/time.ts for the strategy).
+  const offsetRef = useRef<number | null>(null);
 
   // Show the win/lose popup exactly once, only to a viewer who actually bid.
   const resultShownRef = useRef(false);
   const notifyRef = useRef(notify);
-  notifyRef.current = notify;
+  useEffect(() => {
+    notifyRef.current = notify;
+  }, [notify]);
+
+  // Bid-status notifications are transient toasts fired on *transitions* of
+  // the viewer flags (not persistent banners): becoming the highest bidder →
+  // green, being outbid → yellow. The previous flags are tracked so a toast
+  // fires once per change, not on every streamed update.
+  const prevViewerFlagsRef = useRef<{ isHighBidder: boolean; hasBeenOutbid: boolean } | null>(
+    null
+  );
+
+  function maybeAnnounceBidStatus(state: AuctionState) {
+    const viewer = state.viewer;
+    if (!viewer || state.status !== "active") return;
+    const prev = prevViewerFlagsRef.current;
+    if (viewer.has_been_outbid && !prev?.hasBeenOutbid) {
+      notifyRef.current("You've been outbid!", "warning");
+    }
+    if (viewer.is_high_bidder && !prev?.isHighBidder) {
+      notifyRef.current("You are the highest bidder", "success");
+    }
+    prevViewerFlagsRef.current = {
+      isHighBidder: viewer.is_high_bidder,
+      hasBeenOutbid: viewer.has_been_outbid,
+    };
+  }
 
   function maybeAnnounceResult(state: AuctionState) {
     if (resultShownRef.current) return;
@@ -65,50 +92,17 @@ export default function AuctionView() {
     }
   }
 
+  // React to every new state, whether it arrived via SSE or a bid response.
   useEffect(() => {
-    let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
-
-    async function poll() {
-      try {
-        const state = await getAuction(auctionId, tokenRef.current);
-        if (cancelled) return;
-        setAuction(state);
-        setServerOffsetMs(computeServerOffsetMs(state.server_time));
-        setNotFound(false);
-        setPollError(null);
-        setIsLoading(false);
-        maybeAnnounceResult(state);
-        if (state.status === "ended" && intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      } catch (err) {
-        if (cancelled) return;
-        if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-          setIsLoading(false);
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-          }
-          return;
-        }
-        setPollError(
-          err instanceof ApiError ? err.message : "Could not reach the server."
-        );
-        setIsLoading(false);
-      }
+    if (!auction) return;
+    const next = computeServerOffsetMs(auction.server_time);
+    if (shouldRebaseOffset(offsetRef.current, next)) {
+      offsetRef.current = next;
+      setServerOffsetMs(next);
     }
-
-    poll();
-    intervalId = setInterval(poll, POLL_INTERVAL_MS);
-
-    return () => {
-      cancelled = true;
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [auctionId]);
+    maybeAnnounceBidStatus(auction);
+    maybeAnnounceResult(auction);
+  }, [auction]);
 
   if (isLoading) {
     return <p className="muted">Loading auction...</p>;
@@ -120,7 +114,7 @@ export default function AuctionView() {
 
   if (!auction) {
     return (
-      <div className="banner banner-error">{pollError ?? "Something went wrong."}</div>
+      <div className="banner banner-error">{loadError ?? "Something went wrong."}</div>
     );
   }
 
@@ -129,8 +123,10 @@ export default function AuctionView() {
 
   return (
     <div className="stack">
-      {pollError && (
-        <div className="banner banner-warning">{pollError} (retrying...)</div>
+      {isReconnecting && !isEnded && (
+        <div className="banner banner-warning">
+          Connection to the live feed lost — reconnecting...
+        </div>
       )}
 
       <div className="card stack">
@@ -160,10 +156,6 @@ export default function AuctionView() {
         />
       </div>
 
-      {auction.viewer?.has_been_outbid && !isEnded && (
-        <div className="banner banner-warning">You&apos;ve been outbid!</div>
-      )}
-
       {isEnded && (
         <div className={`banner ${hasWinner ? "banner-success" : "banner-warning"}`}>
           {hasWinner ? (
@@ -182,10 +174,7 @@ export default function AuctionView() {
         auctionId={auction.id}
         currentBidCents={auction.current_bid_cents}
         status={auction.status}
-        onBidPlaced={(state) => {
-          setAuction(state);
-          setServerOffsetMs(computeServerOffsetMs(state.server_time));
-        }}
+        onBidPlaced={applyState}
       />
 
       <div className="card stack">

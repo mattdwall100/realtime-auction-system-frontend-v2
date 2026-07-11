@@ -6,20 +6,19 @@ import { listWonAuctions, type AuctionSummary } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { centsToDisplay } from "@/lib/money";
 
-const POLL_INTERVAL_MS = 10_000;
-
 export default function WinningBids() {
-  const { token } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [wins, setWins] = useState<AuctionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // No polling: loads once per visit; anything newer arrives on page refresh.
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     let cancelled = false;
 
     async function load() {
       try {
-        const data = await listWonAuctions(token!);
+        const data = await listWonAuctions();
         if (cancelled) return;
         setWins(data);
         setError(null);
@@ -30,12 +29,10 @@ export default function WinningBids() {
     }
 
     load();
-    const intervalId = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
     };
-  }, [token]);
+  }, [isAuthenticated]);
 
   return (
     <div className="card stack">

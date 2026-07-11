@@ -6,8 +6,6 @@ import { listMyAuctions, type AuctionSummary } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { centsToDisplay } from "@/lib/money";
 
-const POLL_INTERVAL_MS = 10_000;
-
 function summaryLine(auction: AuctionSummary): string {
   if (auction.status === "ended") {
     return auction.high_bidder_identifier
@@ -24,17 +22,19 @@ function summaryLine(auction: AuctionSummary): string {
 }
 
 export default function MyAuctions({ refreshKey }: { refreshKey: number }) {
-  const { token } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [auctions, setAuctions] = useState<AuctionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // No polling: loads once and refetches when refreshKey changes (e.g. after
+  // creating an auction). Anything newer arrives on page refresh.
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     let cancelled = false;
 
     async function load() {
       try {
-        const data = await listMyAuctions(token!);
+        const data = await listMyAuctions();
         if (cancelled) return;
         setAuctions(data);
         setError(null);
@@ -45,12 +45,10 @@ export default function MyAuctions({ refreshKey }: { refreshKey: number }) {
     }
 
     load();
-    const intervalId = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
     };
-  }, [token, refreshKey]);
+  }, [isAuthenticated, refreshKey]);
 
   return (
     <div className="card stack">

@@ -3,8 +3,10 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
+import { useToast } from "@/lib/toast";
 import { ApiError, placeBid, type AuctionState } from "@/lib/api";
 import { centsToDisplay, minNextBidCents, poundsToCents } from "@/lib/money";
+import { MAX_MONEY_CENTS } from "@/lib/validation";
 
 interface BidFormProps {
   auctionId: number;
@@ -13,17 +15,21 @@ interface BidFormProps {
   onBidPlaced: (state: AuctionState) => void;
 }
 
+// Server responses surface as transient toasts, not in-page banners: business
+// rejections ("already the highest bidder") as a yellow warning, other errors
+// red, and a successful bid via the "You are the highest bidder" transition
+// toast in AuctionView. Only client-side *input* validation stays inline,
+// since it belongs next to the field it corrects.
 export default function BidForm({
   auctionId,
   currentBidCents,
   status,
   onBidPlaced,
 }: BidFormProps) {
-  const { token, bidderIdentifier } = useAuth();
+  const { isAuthenticated, bidderIdentifier } = useAuth();
+  const { notify } = useToast();
   const [amount, setAmount] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isEnded = status === "ended";
@@ -31,13 +37,6 @@ export default function BidForm({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setFieldError(null);
-    setSubmitError(null);
-    setSuccessMessage(null);
-
-    if (!token) {
-      setSubmitError("You must be logged in to bid.");
-      return;
-    }
 
     const value = Number(amount);
     if (Number.isNaN(value) || value <= 0) {
@@ -45,6 +44,10 @@ export default function BidForm({
       return;
     }
     const amountCents = poundsToCents(value);
+    if (amountCents > MAX_MONEY_CENTS) {
+      setFieldError(`Bid cannot exceed ${centsToDisplay(MAX_MONEY_CENTS)}.`);
+      return;
+    }
     const minBid = minNextBidCents(currentBidCents);
     if (amountCents < minBid) {
       setFieldError(
@@ -57,18 +60,28 @@ export default function BidForm({
 
     setIsSubmitting(true);
     try {
-      const state = await placeBid(auctionId, amountCents, token);
+      const state = await placeBid(auctionId, amountCents);
       onBidPlaced(state);
-      setSuccessMessage("Bid placed!");
       setAmount("");
     } catch (err) {
-      setSubmitError(err instanceof ApiError ? err.message : "Could not place bid.");
+      const message = err instanceof ApiError ? err.message : "Could not place bid.";
+      // "Already the highest bidder" is a business-rule nudge, not a failure —
+      // surface it as a yellow warning toast rather than a red error.
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        /highest bidder/i.test(err.message)
+      ) {
+        notify(message, "warning");
+      } else {
+        notify(message, "error");
+      }
     } finally {
       setIsSubmitting(false);
     }
   }
 
-  if (!token) {
+  if (!isAuthenticated) {
     return (
       <div className="card stack">
         <h2>Place a bid</h2>
@@ -89,8 +102,6 @@ export default function BidForm({
         {!isEnded && ` · minimum bid ${centsToDisplay(minNextBidCents(currentBidCents))}`}
       </p>
       {fieldError && <div className="banner banner-error">{fieldError}</div>}
-      {submitError && <div className="banner banner-error">{submitError}</div>}
-      {successMessage && <div className="banner banner-success">{successMessage}</div>}
       <form className="inline-form" onSubmit={handleSubmit}>
         <div className="field">
           <label htmlFor="bidAmount">Your bid (£)</label>

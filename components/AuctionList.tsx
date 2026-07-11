@@ -1,27 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { listAuctions, type AuctionSummary } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
 import { centsToDisplay } from "@/lib/money";
 
-const POLL_INTERVAL_MS = 3000;
-
 export default function AuctionList({ refreshKey }: { refreshKey: number }) {
-  const { token } = useAuth();
   const [auctions, setAuctions] = useState<AuctionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const tokenRef = useRef(token);
-  tokenRef.current = token;
-
+  // No polling: the list loads once and refetches when refreshKey changes
+  // (e.g. after creating an auction). Anything newer arrives on page refresh.
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
-        const data = await listAuctions("active", tokenRef.current);
+        const data = await listAuctions("active");
         if (cancelled) return;
         setAuctions(data);
         setError(null);
@@ -32,10 +27,8 @@ export default function AuctionList({ refreshKey }: { refreshKey: number }) {
     }
 
     load();
-    const intervalId = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
     };
   }, [refreshKey]);
 

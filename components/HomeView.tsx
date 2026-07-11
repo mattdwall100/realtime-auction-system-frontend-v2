@@ -1,31 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import CreateAuctionForm from "./CreateAuctionForm";
 import AuctionList from "./AuctionList";
 import MyAuctions from "./MyAuctions";
 import WinningBids from "./WinningBids";
 
+// The live-auctions list is public (GET /auctions needs no auth), so the home
+// page is browsable without logging in — auth only gates creating auctions and
+// the personal lists. Bidding is gated on the auction page itself.
 export default function HomeView() {
-  const { token, isReady } = useAuth();
-  const router = useRouter();
+  const { isAuthenticated, isReady } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    if (isReady && !token) {
-      router.replace("/login?next=/");
-    }
-  }, [isReady, token, router]);
 
   if (!isReady) {
     return <p className="muted">Loading...</p>;
   }
 
-  // Redirecting to /login; render nothing to avoid flashing protected content.
-  if (!token) {
-    return null;
+  if (!isAuthenticated) {
+    return (
+      <div className="stack">
+        <div className="card stack">
+          <h1>Live auctions</h1>
+          <p className="muted">
+            Browse freely — <Link href="/login">log in</Link> or{" "}
+            <Link href="/register">register</Link> to create auctions and place
+            bids.
+          </p>
+        </div>
+        <AuctionList refreshKey={refreshKey} />
+      </div>
+    );
   }
 
   return (

@@ -2,17 +2,19 @@
 
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
-import { useAuth } from "@/lib/auth";
 import { ApiError, createAuction, type CreateAuctionResponse } from "@/lib/api";
-import { poundsToCents } from "@/lib/money";
+import { centsToDisplay, poundsToCents } from "@/lib/money";
+import {
+  MAX_AUCTION_DURATION_SECONDS,
+  MAX_MONEY_CENTS,
+  validateItemName,
+} from "@/lib/validation";
 
 export default function CreateAuctionForm({
   onCreated,
 }: {
   onCreated?: () => void;
 }) {
-  const { token } = useAuth();
-
   const [itemName, setItemName] = useState("");
   const [startingPrice, setStartingPrice] = useState("");
   const [durationSeconds, setDurationSeconds] = useState("");
@@ -21,13 +23,21 @@ export default function CreateAuctionForm({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [created, setCreated] = useState<CreateAuctionResponse | null>(null);
 
+  // UX-only pre-checks; the backend re-validates all of this authoritatively.
   function validate(): string | null {
-    if (!itemName.trim()) return "Item name is required.";
+    const nameError = validateItemName(itemName);
+    if (nameError) return nameError;
     const price = Number(startingPrice);
     if (Number.isNaN(price) || price < 0) return "Starting price must be 0 or more.";
+    if (poundsToCents(price) > MAX_MONEY_CENTS) {
+      return `Starting price cannot exceed ${centsToDisplay(MAX_MONEY_CENTS)}.`;
+    }
     const duration = Number(durationSeconds);
     if (!Number.isInteger(duration) || duration <= 0) {
       return "Duration must be a whole number of seconds greater than 0.";
+    }
+    if (duration > MAX_AUCTION_DURATION_SECONDS) {
+      return "Auction duration cannot exceed 7 days (604800 seconds).";
     }
     return null;
   }
@@ -46,14 +56,11 @@ export default function CreateAuctionForm({
     setIsSubmitting(true);
 
     try {
-      const response = await createAuction(
-        {
-          itemName: itemName.trim(),
-          startingPriceCents: poundsToCents(Number(startingPrice)),
-          durationSeconds: Number(durationSeconds),
-        },
-        token
-      );
+      const response = await createAuction({
+        itemName: itemName.trim(),
+        startingPriceCents: poundsToCents(Number(startingPrice)),
+        durationSeconds: Number(durationSeconds),
+      });
       setCreated(response);
       setItemName("");
       setStartingPrice("");
@@ -78,6 +85,7 @@ export default function CreateAuctionForm({
             <input
               id="itemName"
               type="text"
+              maxLength={100}
               value={itemName}
               onChange={(e) => setItemName(e.target.value)}
               placeholder="Vintage Watch"
@@ -96,11 +104,12 @@ export default function CreateAuctionForm({
             />
           </div>
           <div className="field">
-            <label htmlFor="durationSeconds">Duration (seconds)</label>
+            <label htmlFor="durationSeconds">Duration (seconds, max 7 days)</label>
             <input
               id="durationSeconds"
               type="number"
               min="1"
+              max={MAX_AUCTION_DURATION_SECONDS}
               step="1"
               value={durationSeconds}
               onChange={(e) => setDurationSeconds(e.target.value)}

@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+import {
+  MAX_PASSWORD_LENGTH,
+  MIN_PASSWORD_LENGTH,
+  validateBidderIdentifier,
+  validateEmail,
+  validateNewPassword,
+} from "@/lib/validation";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -20,14 +27,19 @@ export default function RegisterPage() {
     event.preventDefault();
     setError(null);
 
-    if (!bidderIdentifier.trim()) {
-      setError("Bidder identifier is required.");
+    // UX-only pre-checks mirroring the backend rules, which stay authoritative.
+    const validationError =
+      validateEmail(email) ??
+      validateNewPassword(password) ??
+      validateBidderIdentifier(bidderIdentifier);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await register(email, password, bidderIdentifier);
+      await register(email, password, bidderIdentifier.trim());
       const next = new URLSearchParams(window.location.search).get("next");
       router.push(next || "/");
     } catch (err) {
@@ -53,21 +65,26 @@ export default function RegisterPage() {
           />
         </div>
         <div className="field">
-          <label htmlFor="password">Password</label>
+          <label htmlFor="password">Password (min {MIN_PASSWORD_LENGTH} characters)</label>
           <input
             id="password"
             type="password"
             required
+            minLength={MIN_PASSWORD_LENGTH}
+            maxLength={MAX_PASSWORD_LENGTH}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
         </div>
         <div className="field">
-          <label htmlFor="bidderIdentifier">Bidder identifier (public display name)</label>
+          <label htmlFor="bidderIdentifier">
+            Bidder identifier (public display name — letters, numbers, _ and -)
+          </label>
           <input
             id="bidderIdentifier"
             type="text"
             required
+            maxLength={32}
             value={bidderIdentifier}
             onChange={(e) => setBidderIdentifier(e.target.value)}
             placeholder="e.g. alice"
